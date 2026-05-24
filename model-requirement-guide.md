@@ -1,5 +1,18 @@
 # How to Choose Models in LLMswitch
 
+## The only hard requirement for any model
+
+The model must support tool use (function calling) in Anthropic format. Claude Code's entire agentic loop is tool calls: reading files, running bash, writing code. A model that cannot emit a valid tool use block cannot take any action in Claude Code.
+
+Everything else — context length, instruction following quality, code generation quality — is a performance concern not a compatibility concern.
+
+To verify a model supports tool use before assigning it to a slot:
+
+- Check `https://openrouter.ai/models?supported_parameters=tools` for OpenRouter models
+- Or send a minimal tool use request and check that `stop_reason` is `tool_use` in the response
+
+---
+
 ## Claude Code's three-tier architecture
 
 Claude Code does not work with a single model. Internally it operates across three task tiers, each mapped to a different model slot. Understanding this is the foundation of any cost/quality optimization strategy.
@@ -56,19 +69,6 @@ This means model selection is a slot-filling exercise. You are not telling Claud
 
 ---
 
-## The only hard requirement for any model
-
-The model must support tool use (function calling) in Anthropic format. Claude Code's entire agentic loop is tool calls: reading files, running bash, writing code. A model that cannot emit a valid tool use block cannot take any action in Claude Code.
-
-Everything else, context length, instruction following quality, code generation quality, is a performance concern not a compatibility concern.
-
-To verify a model supports tool use before assigning it to a slot:
-
-- Check `https://openrouter.ai/models?supported_parameters=tools` for OpenRouter models
-- Or send a minimal tool use request and check that `stop_reason` is `tool_use` in the response
-
----
-
 ## Decision framework per slot
 
 ### Opus slot
@@ -100,8 +100,8 @@ Optimize purely for speed and cost here. The tasks routed to this slot do not ne
 ### Maximum quality (cost secondary)
 
 ```bash
-ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-opus-4-5"
-ANTHROPIC_DEFAULT_SONNET_MODEL="anthropic/claude-sonnet-4-5"
+ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-opus-4-7"
+ANTHROPIC_DEFAULT_SONNET_MODEL="anthropic/claude-sonnet-4-6"
 ANTHROPIC_DEFAULT_HAIKU_MODEL="anthropic/claude-haiku-4-5"
 CLAUDE_CODE_SUBAGENT_MODEL="anthropic/claude-haiku-4-5"
 ```
@@ -111,7 +111,7 @@ Use `claudepro` provider for this. Flat rate, no per-token cost.
 ### Cost optimized, quality maintained
 
 ```bash
-ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-sonnet-4-5"
+ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-sonnet-4-6"
 ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek/deepseek-chat"
 ANTHROPIC_DEFAULT_HAIKU_MODEL="google/gemini-flash-1.5"
 CLAUDE_CODE_SUBAGENT_MODEL="google/gemini-flash-1.5"
@@ -147,7 +147,7 @@ providers/
 
 Switch between strategies cleanly:
 
-```zsh
+```sh
 cc-use openrouter-budget
 cc-use openrouter-experimental
 cc-use claudepro
@@ -157,18 +157,4 @@ Each file is self-contained and independently tracked in git. You can iterate on
 
 ---
 
-## Model compatibility reference
-
-| Model | Tool use | Thinking blocks | Recommended slot |
-|---|---|---|---|
-| `anthropic/claude-opus-4-5` | yes | yes | Opus |
-| `anthropic/claude-sonnet-4-5` | yes | yes | Sonnet |
-| `anthropic/claude-haiku-4-5` | yes | no | Haiku |
-| `deepseek/deepseek-chat` | yes | no | Sonnet |
-| `deepseek/deepseek-r1` | yes | no (converted) | Opus / Sonnet |
-| `google/gemini-2.5-pro` | yes | no | Sonnet |
-| `google/gemini-flash-1.5` | yes | no | Haiku |
-| `openai/gpt-4o` | yes | no | Sonnet |
-| `meta-llama/llama-3.1-405b` | partial | no | Sonnet (degraded) |
-
-Thinking block support means the model returns structured `thinking` content blocks via the API endpoint, not that the model is incapable of reasoning internally. See the normalization proxy section in README.md for how LLMswitch handles thinking block conversion for non-Anthropic models.
+Thinking block support means the model returns structured `thinking` content blocks via the API endpoint, not that the model is incapable of reasoning internally. See [misc/future_release.md](misc/future_release.md) for how a normalization proxy would handle thinking block conversion for non-Anthropic models.

@@ -102,6 +102,12 @@ cc-status               # show current provider and active env vars
 cc-providers            # list all available providers with their model assignments
 ```
 
+Tab completion for `cc-use` is registered automatically in zsh and bash when `bootstrap.sh` is sourced. For fish, symlink the completion file once:
+
+```sh
+ln -s ~/.claude/LLMswitch/completions/cc-use.fish ~/.config/fish/completions/cc-use.fish
+```
+
 ---
 
 ## Provider behavior
