@@ -13,7 +13,8 @@ fi
 
 _APISWITCHER_ENV="$_APISWITCHER_DIR/.env"
 _APISWITCHER_PROVIDERS="$_APISWITCHER_DIR/providers"
-_APISWITCHER_STATE="${TMPDIR:-/tmp}/.cc_provider"
+_APISWITCHER_STATE="$_APISWITCHER_DIR/.state/provider"
+mkdir -p "$_APISWITCHER_DIR/.state"
 
 # Load keys from .env on shell startup
 if [ -f "$_APISWITCHER_ENV" ]; then

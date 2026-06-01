@@ -17,7 +17,7 @@ Claude Code determines which API to talk to by reading environment variables at 
 
 LLMswitch manages these variables by sourcing provider files directly into your current shell session. Sourcing (`. file` or `source file`) runs the file inside the current process rather than a child, so exports land in your live session and Claude Code picks them up immediately on next launch.
 
-Provider state is persisted across shell sessions via a temp file so your last used provider is automatically restored when you open a new terminal.
+Provider state is persisted across shell sessions in a local `.state/` directory so your last used provider is automatically restored when you open a new terminal, including after a reboot.
 
 ---
 
@@ -25,14 +25,17 @@ Provider state is persisted across shell sessions via a temp file so your last u
 
 ```
 ~/.claude/LLMswitch/
-├── .env                    # your API keys, untracked
-├── .env.example            # key template, tracked
-├── provider.example.sh     # provider file template, tracked
-├── bootstrap.sh            # sourced by ~/.zshrc or ~/.bashrc
+├── .env                        # your API keys, untracked
+├── .env.example                # key template, tracked
+├── .state/                     # active provider state, untracked
+├── bootstrap.sh                # sourced by ~/.zshrc or ~/.bashrc
 ├── providers/
-│   ├── anthropic.sh        # Anthropic API (billed per token)
-│   ├── claudepro.sh        # Anthropic Pro/Max (OAuth, subscription)
-│   └── openrouter.sh       # OpenRouter (billed per token via credits)
+│   ├── claudepro.sh            # Anthropic Pro/Max (OAuth, subscription)
+│   ├── openrouter.sh           # OpenRouter (billed per token via credits)
+│   └── examples/               # copy-ready templates, not loaded by cc-use
+│       ├── anthropic.sh        # Anthropic API (billed per token)
+│       ├── openrouter.sh       # generic OpenRouter template
+│       └── provider.example.sh # blank provider template
 └── README.md
 ```
 
@@ -95,7 +98,6 @@ After this initial login the session persists and no further login steps are nee
 
 ```zsh
 cc-use claudepro        # Anthropic Pro/Max subscription
-cc-use anthropic        # Anthropic API, billed per token
 cc-use openrouter       # OpenRouter, billed per token via credits
 
 cc-status               # show current provider and active env vars
@@ -118,12 +120,6 @@ Unsets all API-related env vars and lets Claude Code fall back to the stored OAu
 
 Best for: heavy agentic sessions, large refactors, long multi-file tasks.
 
-### `anthropic`
-
-Sets `ANTHROPIC_API_KEY` from `.env` and unsets all routing vars so Claude Code talks directly to `api.anthropic.com`. Billed per token at Anthropic's standard API rates.
-
-Best for: programmatic or CI usage where OAuth is not suitable.
-
 ### `openrouter`
 
 Sets `ANTHROPIC_BASE_URL` to `https://openrouter.ai/api` and `ANTHROPIC_AUTH_TOKEN` to your OpenRouter key. Sets `ANTHROPIC_API_KEY` to an empty string explicitly (not unset) to prevent Claude Code from falling back to the OAuth session. Also sets model vars to pin specific models per task class.
@@ -136,7 +132,7 @@ Best for: overflow when hitting Pro rate limits, testing non-Anthropic models, c
 
 ## Adding a provider
 
-Copy `provider.example.sh` to `providers/<name>.sh` and fill in the values. The file documents every available env var with inline guidance.
+Copy `providers/examples/provider.example.sh` (or the relevant example in `providers/examples/`) to `providers/<name>.sh` and fill in the values. The file documents every available env var with inline guidance.
 
 Add the corresponding API key to `.env` and `.env.example`.
 
@@ -146,9 +142,9 @@ Add the corresponding API key to `.env` and `.env.example`.
 
 ## State persistence
 
-The active provider name is written to `${TMPDIR:-/tmp}/.cc_provider` on every `cc-use` call. On shell startup, `bootstrap.sh` reads this file and re-sources the corresponding provider file so your choice survives closing and reopening the terminal.
+The active provider name is written to `.state/provider` inside the project directory on every `cc-use` call. On shell startup, `bootstrap.sh` reads this file and re-sources the corresponding provider file so your choice survives closing and reopening the terminal, including across reboots.
 
-If the state file is missing or references a provider file that no longer exists, bootstrap silently skips restoration and no provider is active.
+The `.state/` directory is created automatically and is gitignored. If the state file is missing or references a provider file that no longer exists, bootstrap silently skips restoration and no provider is active.
 
 ---
 
