@@ -1,160 +1,237 @@
-# How to Choose Models in LLMswitch
+# Model Requirements Guide
 
-## The only hard requirement for any model
+## Minimum compatibility requirements
 
-The model must support tool use (function calling) in Anthropic format. Claude Code's entire agentic loop is tool calls: reading files, running bash, writing code. A model that cannot emit a valid tool use block cannot take any action in Claude Code.
+For a model to function in Claude Code at all, four conditions must hold. These are compatibility requirements, not performance concerns. A model missing any one of them will break the agentic loop.
 
-Everything else — context length, instruction following quality, code generation quality — is a performance concern not a compatibility concern.
+**1. Tool use in Anthropic format**
 
-To verify a model supports tool use before assigning it to a slot:
+The model must emit correctly structured `tool_use` content blocks and handle `tool_result` blocks in the message history. This is the hard gate. Every action Claude Code takes -- reading files, running bash, writing code -- is a tool call. A model that cannot produce valid tool call responses cannot take any action.
 
-- Check `https://openrouter.ai/models?supported_parameters=tools` for OpenRouter models
-- Or send a minimal tool use request and check that `stop_reason` is `tool_use` in the response
+To verify before assigning a model to a slot, either check the provider's documented supported parameters for their Anthropic endpoint, or send a minimal tool use request and confirm `stop_reason` is `tool_use` in the response.
+
+**2. Streaming**
+
+Responses must stream. Claude Code does not operate in single-turn completion mode.
+
+**3. Large context handling**
+
+The message array passed on each turn includes the system prompt, CLAUDE.md, tool definitions, and the full conversation history. This compounds quickly on real codebases. 32K minimum context window, 128K+ preferred. The model must not degrade or truncate silently under load.
+
+**4. Interleaved tool results in message history**
+
+The messages array is not plain text turns. It contains `tool_use` and `tool_result` blocks interleaved throughout the conversation. The model must handle this structure correctly across the full session, not just on the first turn.
+
+---
+
+## Capability declarations
+
+Capabilities are declared in the provider file via `_SUPPORTED_CAPABILITIES` environment variables. These are Claude Code client-side flags. They control which Anthropic API parameters Claude Code includes in its requests and which UI features it surfaces.
+
+The reference mapping lives in `docs/capabilities-reference.md`. That file defines which Anthropic API parameter each capability string unlocks. When building a provider file, the workflow is:
+
+```
+provider's Anthropic endpoint docs
+        |
+        v
+which request parameters does this model support
+        |
+        v
+map to capability strings via capabilities-reference.md
+        |
+        v
+populate _SUPPORTED_CAPABILITIES in the provider file
+```
+
+If `_SUPPORTED_CAPABILITIES` is unset, Claude Code falls back to ID-based detection. For non-Anthropic model IDs that do not match Claude's internal patterns, detection returns empty and all advanced capabilities are disabled. The session still runs but as a bare request with no thinking, no effort control, and no related UI features.
+
+If `_SUPPORTED_CAPABILITIES` is set to any value, it becomes a strict allowlist. Capabilities not listed are explicitly disabled even if the model supports them. Do not set it to an empty string -- either populate it correctly or omit it entirely.
 
 ---
 
 ## Claude Code's three-tier architecture
 
-Claude Code does not work with a single model. Internally it operates across three task tiers, each mapped to a different model slot. Understanding this is the foundation of any cost/quality optimization strategy.
+Claude Code routes tasks across three model slots internally. You do not control which slot a task lands in. You control what model sits in each slot.
 
-### Tier 1: Opus slot
+```
+task complexity -> tier selection (Claude Code decides)
+tier selection  -> model string  (you decide via env vars)
+model string    -> API request   (LLMswitch routes)
+```
 
-The heavyweight tier. Claude Code reaches for this slot when it needs to:
+### Opus slot
 
-- Plan a complex multi-step task before execution
-- Reason through an ambiguous problem with no clear path
-- Handle tasks that require synthesizing large amounts of context
-
-In practice Claude Code does not use this slot as often as you might expect. Most coding work lands in the Sonnet slot. Opus gets called for the hard reasoning gates.
+Called for complex planning, hard reasoning gates, and tasks requiring synthesis of large context. Used less frequently than the Sonnet slot -- most coding work does not reach it. Because it is called infrequently and for the hardest tasks, degrading this slot to save cost is a poor trade.
 
 Controlled by: `ANTHROPIC_DEFAULT_OPUS_MODEL`
 
-### Tier 2: Sonnet slot
+### Sonnet slot
 
-The workhorse tier. This is where the majority of your token spend goes. Claude Code uses this slot for:
-
-- Writing and editing code
-- Reading and understanding files
-- Executing multi-step agentic loops
-- Most general task execution
-
-This slot has the highest impact on both quality and cost. Choosing the right model here is the most important decision.
+The workhorse. The majority of token spend lands here. Writing and editing code, reading files, executing multi-step agentic loops, general task execution. Model quality in this slot has the highest impact on both output quality and cost. This is where evaluation effort should be concentrated.
 
 Controlled by: `ANTHROPIC_DEFAULT_SONNET_MODEL`
 
-### Tier 3: Haiku slot
+### Haiku slot
 
-The fast and cheap tier. Claude Code uses this for:
-
-- Quick completions
-- Background classification tasks
-- Spawned subagent work
-- Anything that does not need full reasoning capability
+Fast and cheap tier. Quick completions, background classification, spawned subagent work. Strong reasoning is not required here. Optimize for speed, cost, and reliable tool use.
 
 Controlled by: `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL`
 
 ---
 
-## How Claude Code picks a tier
+## Slot assignment patterns
 
-Claude Code decides which tier to use based on the task internally. You do not control this directly. What you control is what model sits in each slot. The mapping is fixed:
+These are strategy patterns, not fixed configurations. Model names given as current examples -- substitute equivalents from your provider as the landscape evolves.
 
-```
-task complexity -> tier selection (Claude Code decides)
-tier selection  -> model string (you decide via env vars)
-model string    -> API request (LLMswitch routes)
-```
+### Maximum quality
 
-This means model selection is a slot-filling exercise. You are not telling Claude Code which model to use for a specific task. You are telling it what to use when it decides to reach for a given tier.
-
----
-
-## Decision framework per slot
-
-### Opus slot
-
-You have two options:
-
-Keep a strong Anthropic model here even when using non-Anthropic models for Sonnet. The Opus slot is called infrequently so the cost impact is low, and the tasks it handles are precisely the ones where model quality matters most. Degrading this slot to save money is a bad trade.
-
-Or assign the same model as Sonnet if the model you chose is already strong enough for reasoning tasks. Many modern frontier models (DeepSeek R1, Gemini 2.5 Pro) are capable enough that a separate Opus-class model is not necessary.
-
-### Sonnet slot
-
-This is where you should spend the most time evaluating. Criteria in order of importance:
-
-1. Tool use reliability under multi-step agentic workloads, not just single function calls
-2. Instruction following on long, precise system prompts
-3. Code generation quality in your primary languages
-4. Context window size (32K minimum, 128K+ preferred for large codebases)
-5. Cost per token
-
-### Haiku slot
-
-Optimize purely for speed and cost here. The tasks routed to this slot do not need strong reasoning. A fast, cheap model with reliable tool use is the right choice. Gemini Flash and Claude Haiku are the current reference points for this tier.
-
----
-
-## Practical model assignments by strategy
-
-### Maximum quality (cost secondary)
+All slots filled with the strongest available models. Cost is secondary. Appropriate when correctness matters more than spend, or when operating on a flat-rate subscription where per-token cost is not a concern.
 
 ```bash
-ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-opus-4-7"
-ANTHROPIC_DEFAULT_SONNET_MODEL="anthropic/claude-sonnet-4-6"
-ANTHROPIC_DEFAULT_HAIKU_MODEL="anthropic/claude-haiku-4-5"
-CLAUDE_CODE_SUBAGENT_MODEL="anthropic/claude-haiku-4-5"
-```
+# Opus slot: strongest available reasoning model
+ANTHROPIC_DEFAULT_OPUS_MODEL="<frontier-reasoning-model>"
+# example: qwen/qwen3-235b-a22b, deepseek/deepseek-r1
 
-Use `claudepro` provider for this. Flat rate, no per-token cost.
+# Sonnet slot: strongest available coding model
+ANTHROPIC_DEFAULT_SONNET_MODEL="<frontier-coding-model>"
+# example: google/gemini-2.5-pro, deepseek/deepseek-chat-v3
+
+# Haiku slot: fast model with reliable tool use
+ANTHROPIC_DEFAULT_HAIKU_MODEL="<fast-cheap-model>"
+CLAUDE_CODE_SUBAGENT_MODEL="<fast-cheap-model>"
+# example: google/gemini-flash-2.0, meta-llama/llama-3.3-70b-instruct
+```
 
 ### Cost optimized, quality maintained
 
-```bash
-ANTHROPIC_DEFAULT_OPUS_MODEL="anthropic/claude-sonnet-4-6"
-ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek/deepseek-chat"
-ANTHROPIC_DEFAULT_HAIKU_MODEL="google/gemini-flash-1.5"
-CLAUDE_CODE_SUBAGENT_MODEL="google/gemini-flash-1.5"
-```
-
-DeepSeek Chat has strong tool use and good code quality at a fraction of Sonnet's price. Gemini Flash is fast and cheap for background tasks.
-
-### Experimental / evaluation
+Sonnet slot uses a strong but cheap model. Opus slot kept at a capable reasoning model since it is called infrequently and cost impact is low. Haiku slot optimized purely for speed and cost.
 
 ```bash
-ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek/deepseek-r1"
-ANTHROPIC_DEFAULT_SONNET_MODEL="google/gemini-2.5-pro"
-ANTHROPIC_DEFAULT_HAIKU_MODEL="google/gemini-flash-1.5"
-CLAUDE_CODE_SUBAGENT_MODEL="google/gemini-flash-1.5"
+# Opus slot: capable reasoning model, low frequency so cost impact is small
+ANTHROPIC_DEFAULT_OPUS_MODEL="<reasoning-capable-model>"
+# example: deepseek/deepseek-r1
+
+# Sonnet slot: strong tool use and code quality at lower cost
+ANTHROPIC_DEFAULT_SONNET_MODEL="<cost-efficient-coding-model>"
+# example: deepseek/deepseek-chat-v3, mistral/mistral-large
+
+# Haiku slot: fastest and cheapest available
+ANTHROPIC_DEFAULT_HAIKU_MODEL="<fast-cheap-model>"
+CLAUDE_CODE_SUBAGENT_MODEL="<fast-cheap-model>"
+# example: google/gemini-flash-2.0
 ```
 
-Use this configuration via a dedicated provider file (e.g. `openrouter-experimental.sh`) so it does not interfere with your default setup.
+### Homogeneous
+
+Same model across all slots. Appropriate when a single model is capable enough for all tiers and you want to simplify the configuration. Reduces the number of models to evaluate and maintain.
+
+```bash
+ANTHROPIC_DEFAULT_OPUS_MODEL="<strong-general-model>"
+ANTHROPIC_DEFAULT_SONNET_MODEL="<strong-general-model>"
+ANTHROPIC_DEFAULT_HAIKU_MODEL="<strong-general-model>"
+CLAUDE_CODE_SUBAGENT_MODEL="<strong-general-model>"
+# example: google/gemini-2.5-pro across all slots
+```
+
+### Experimental
+
+Dedicated provider file for evaluating new models without touching your working configuration. Run in parallel against a real task and compare output quality and cost before promoting to a primary profile.
+
+```bash
+# Opus slot: experimental reasoning model under evaluation
+ANTHROPIC_DEFAULT_OPUS_MODEL="<model-under-evaluation>"
+
+# Sonnet slot: experimental coding model under evaluation
+ANTHROPIC_DEFAULT_SONNET_MODEL="<model-under-evaluation>"
+
+# Haiku slot: keep a known-good model here to isolate variables
+ANTHROPIC_DEFAULT_HAIKU_MODEL="<known-good-fast-model>"
+CLAUDE_CODE_SUBAGENT_MODEL="<known-good-fast-model>"
+```
 
 ---
 
-## Using separate provider files per strategy
+## Slot evaluation criteria
 
-Rather than editing `openrouter.sh` when you want to try a different model mix, create a dedicated provider file per strategy:
+### Opus slot
+
+Priority order:
+1. Multi-step reasoning quality on ambiguous tasks
+2. Performance on large context synthesis
+3. Cost (low weight -- slot is called infrequently)
+
+### Sonnet slot
+
+Priority order:
+1. Tool use reliability under multi-step agentic workloads, not just single function calls
+2. Instruction following on long precise system prompts
+3. Code generation quality in your primary languages
+4. Context window size (32K minimum, 128K+ preferred)
+5. Cost per token (high weight -- this is where most spend lands)
+
+### Haiku slot
+
+Priority order:
+1. Tool use reliability (still required)
+2. Latency
+3. Cost per token
+4. Reasoning quality (low weight -- not the purpose of this slot)
+
+---
+
+## Provider file structure
+
+Each provider file is self-contained. It sets routing config and capability declarations together. Capability declarations must match what the specific model on that provider's Anthropic endpoint actually supports.
+
+```bash
+# Provider: <name>
+# Sourced by cc-use, never executed directly.
+
+export ANTHROPIC_BASE_URL="<provider-anthropic-endpoint>"
+export ANTHROPIC_AUTH_TOKEN="$<PROVIDER_API_KEY_VAR>"
+export ANTHROPIC_API_KEY=""
+
+# Opus slot
+export ANTHROPIC_DEFAULT_OPUS_MODEL="<model-id>"
+export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="<display-name>"
+export ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION="<one-line description>"
+export ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES="<capability-strings>"
+
+# Sonnet slot
+export ANTHROPIC_DEFAULT_SONNET_MODEL="<model-id>"
+export ANTHROPIC_DEFAULT_SONNET_MODEL_NAME="<display-name>"
+export ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION="<one-line description>"
+export ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES="<capability-strings>"
+
+# Haiku slot
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="<model-id>"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="<display-name>"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION="<one-line description>"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES="<capability-strings>"
+
+export CLAUDE_CODE_SUBAGENT_MODEL="<model-id>"
+```
+
+For capability string values, see `docs/capabilities-reference.md`.
+
+---
+
+## Using multiple provider files
+
+Create a dedicated file per strategy rather than editing a single file when switching configurations. Each file is independently tracked in version control and can be iterated on without affecting others.
 
 ```
 providers/
-├── claudepro.sh              # Anthropic Pro subscription, all Claude models
-├── anthropic.sh              # Anthropic API billed, all Claude models
-├── openrouter.sh             # OpenRouter, Claude models (overflow / rate limit)
-├── openrouter-budget.sh      # OpenRouter, mixed cheap models
-└── openrouter-experimental.sh # OpenRouter, non-Anthropic frontier models
+├── <provider>-quality.sh       # Maximum quality configuration
+├── <provider>-budget.sh        # Cost optimized configuration
+├── <provider>-experimental.sh  # Models under evaluation
+└── <provider>-homogeneous.sh   # Single model across all slots
 ```
 
-Switch between strategies cleanly:
+Switch between configurations:
 
 ```sh
-cc-use openrouter-budget
-cc-use openrouter-experimental
-cc-use claudepro
+cc-use <provider>-budget
+cc-use <provider>-experimental
+cc-use <provider>-quality
 ```
-
-Each file is self-contained and independently tracked in git. You can iterate on one strategy without affecting others.
-
----
-
-Thinking block support means the model returns structured `thinking` content blocks via the API endpoint, not that the model is incapable of reasoning internally. See [misc/future_release.md](misc/future_release.md) for how a normalization proxy would handle thinking block conversion for non-Anthropic models.
